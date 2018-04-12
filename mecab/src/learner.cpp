@@ -48,6 +48,7 @@ class learner_thread: public thread {
 
 class CRFLearner {
  public:
+  enum { CRF_L2, CRF_L1 };
   static int run(Param *param) {
     const std::string dicdir = param->get<std::string>("dicdir");
     CHECK_DIE(param->load(DCONF(DICRC)))
@@ -92,6 +93,29 @@ class CRFLearner {
     const size_t unk_eval_size = param->get<size_t>("unk-eval-size");
     const size_t thread_num = param->get<size_t>("thread");
     const size_t freq = param->get<size_t>("freq");
+    std::string salgo = param->get<std::string>("algorithm");
+
+    toLower(&salgo);
+
+    int algorithm = CRF_L1;
+    if (salgo == "crf" || salgo == "crf-l2") {
+      algorithm = CRF_L2;
+    } else if (salgo == "crf-l1") {
+      algorithm = CRF_L1;
+    } else {
+      std::cerr << "unknown alogrithm: " << salgo << std::endl;
+      return -1;
+    }
+
+    bool orthant = false;
+    switch (algorithm) {
+      case CRF_L2:
+        orthant = false;
+      break;
+      case CRF_L1:
+        orthant = true;
+      break;
+    }
 
     CHECK_DIE(C > 0) << "cost parameter is out of range: " << C;
     CHECK_DIE(eta > 0) "eta is out of range: " << eta;
@@ -219,17 +243,31 @@ class CRFLearner {
       const double r = 1.0 * micro_c / micro_r;
       const double micro_f = 2 * p * r / (p + r);
 
-      for (size_t i = 0; i < psize; ++i) {
-        const double penalty = (alpha[i] - old_alpha[i]);
-        obj += (penalty * penalty / (2.0 * C));
-        expected[i] = expected[i] - observed[i] + penalty / C;
+      size_t num_nonzero = 0;
+      if (orthant) {    // L1
+        for (size_t i = 0; i < psize; ++i) {
+          const double penalty = (alpha[i] - old_alpha[i]);
+          obj += std::fabs(penalty / C);
+          if (penalty != 0.0) {
+            ++num_nonzero;
+          }
+        }
+      } else {
+        num_nonzero = psize;
+        for (size_t i = 0; i < psize; ++i) {
+          const double penalty = (alpha[i] - old_alpha[i]);
+          obj += (penalty * penalty / (2.0 * C));
+          expected[i] = expected[i] - observed[i] + penalty / C;
+        }
       }
+
 
       const double diff = (itr == 0 ? 1.0 :
                            std::fabs(1.0 * (prev_obj - obj)) / prev_obj);
       std::cout << "iter="    << itr
                 << " err="    << 1.0 * err/x.size()
                 << " F="      << micro_f
+                << " act="    << num_nonzero
                 << " target=" << obj
                 << " diff="   << diff << std::endl;
       prev_obj = obj;
@@ -246,7 +284,7 @@ class CRFLearner {
 
       const int ret = lbfgs.optimize(psize,
                                      &alpha[0], obj,
-                                     &expected[0], false, C);
+                                     &expected[0], orthant, C);
 
       CHECK_DIE(ret >= 0) << "unexpected error in LBFGS routin";
 
@@ -291,6 +329,7 @@ class Learner {
         "set the frequency cut-off (default 1)" },
       { "eta",      'e',  "0.00005", "DIR",
         "set FLOAT for tolerance of termination criterion" },
+      {"algorithm",  'a', "CRF-L2",   "(CRF-L1|CRF-L2)", "select training algorithm (default CRF-L2)" },
       { "thread",   'p',  "1",     "INT",    "number of threads(default 1)" },
       { "version",  'v',  0,   0,  "show the version and exit"  },
       { "help",     'h',  0,   0,  "show this help and exit."      },
